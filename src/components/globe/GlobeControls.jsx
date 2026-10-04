@@ -20,8 +20,6 @@ export function GlobeControls({
   countries = [],
   cities = [],
   isAutoRotate = true,
-  engineMode = 'globe',
-  onToggleEngineMode,
   onToggleAutoRotate,
   onResetWorld,
   onRollDice,
@@ -283,23 +281,6 @@ export function GlobeControls({
               {isAutoRotate ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
               <span>{isAutoRotate ? 'ORBITING' : 'RESUME ORBIT'}</span>
             </button>
-
-            {/* Geographic Engine Toggle: 3D Earth Globe vs Google Maps Platform */}
-            {onToggleEngineMode && (
-              <button
-                type="button"
-                onClick={onToggleEngineMode}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-full text-xs font-bold uppercase tracking-wider transition-all border cursor-pointer shadow-md ${
-                  engineMode === 'google'
-                    ? 'bg-purple-600/30 text-purple-300 border-purple-400/60'
-                    : 'bg-white/10 hover:bg-white hover:text-black text-slate-200 border-white/20'
-                }`}
-                title="Switch Geographic Engine (3D Globe / Google Maps)"
-              >
-                <Layers className="w-3.5 h-3.5 text-cyan-400" />
-                <span className="hidden md:inline">{engineMode === 'google' ? 'GOOGLE MAPS' : '3D GLOBE'}</span>
-              </button>
-            )}
           </div>
         </div>
       </div>

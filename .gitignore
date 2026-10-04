@@ -23,10 +23,13 @@ __pycache__/
 *.egg-info/
 scratch/
 
-# Environment secrets
+# Environment secrets & database
 .env
 .env.production
 .env.local
+*.db
+aitrip.db
+
 
 # Editor directories and files
 .vscode/*

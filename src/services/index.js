@@ -82,8 +82,23 @@ export const tripService = {
   },
 
   async getTripById(id) {
-    const trip = trips.find((t) => t.id === id) || trips[0];
-    return Promise.resolve(trip);
+    let trip = trips.find((t) => t.id === id);
+    if (!trip && id) {
+      try {
+        const res = await fetch(`http://127.0.0.1:8000/api/trips/${id}`);
+        if (res.ok) {
+          const remote = await res.json();
+          if (remote && remote.trip) {
+            trip = remote.trip;
+            trips.unshift(trip);
+            persistTrips(trips);
+          }
+        }
+      } catch (e) {
+        console.warn('Backend trip fetch fallback:', e);
+      }
+    }
+    return trip || trips[0];
   },
 
   async createTrip(tripData) {

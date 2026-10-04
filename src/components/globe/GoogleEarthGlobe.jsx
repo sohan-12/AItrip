@@ -10,7 +10,6 @@ import { TravelGlobeScene } from './TravelGlobeScene.jsx';
 import { GlobeBreadcrumb } from './GlobeBreadcrumb.jsx';
 import { GlobeControls } from './GlobeControls.jsx';
 import { LocationPanel } from './LocationPanel.jsx';
-import { GoogleMapsView } from './GoogleMapsView.jsx';
 
 function GlobeFallback() {
   return (
@@ -25,10 +24,8 @@ export function GoogleEarthGlobe({ onSelectDestination }) {
   const controlsRef = useRef();
   const idleTimerRef = useRef(null);
 
-  // Geographic Engine Mode: 'globe' (3D Earth WebGL) | 'google' (Google Maps Satellite/Hybrid)
-  const [engineMode, setEngineMode] = useState('globe');
-
   // Geographic Interaction Level: 'world' | 'country' | 'city' | 'destination'
+
   const [currentLevel, setCurrentLevel] = useState('world');
   const [selectedCountry, setSelectedCountry] = useState(null);
   const [selectedCity, setSelectedCity] = useState(null);
@@ -239,8 +236,6 @@ export function GoogleEarthGlobe({ onSelectDestination }) {
         countries={COUNTRIES}
         cities={CITIES}
         isAutoRotate={isAutoRotate}
-        engineMode={engineMode}
-        onToggleEngineMode={() => setEngineMode((prev) => (prev === 'globe' ? 'google' : 'globe'))}
         onToggleAutoRotate={() => setIsAutoRotate((prev) => !prev)}
         onResetWorld={handleNavigateWorld}
         onRollDice={handleRollDice}
@@ -265,49 +260,40 @@ export function GoogleEarthGlobe({ onSelectDestination }) {
           onNavigateCity={handleNavigateCity}
         />
 
-        {/* Engine Switch: Google Maps Platform vs 3D WebGL Canvas */}
-        {engineMode === 'google' ? (
-          <GoogleMapsView
-            selectedLocation={selectedLocation}
-            curatedCities={CITIES}
-            onSelectCity={handleSelectCity}
-            currentLevel={currentLevel}
-          />
-        ) : (
-          <Canvas
-            camera={{ position: [0, 0, 6.6], fov: 42 }}
-            className="cursor-grab active:cursor-grabbing w-full h-full bg-black"
-            gl={{ antialias: true, powerPreference: 'high-performance' }}
-          >
-            <color attach="background" args={['#000000']} />
-            <ambientLight intensity={1.3} />
-            <directionalLight position={[6, 4, 5]} intensity={2.6} />
-            <directionalLight position={[-6, -3, -4]} intensity={0.5} color="#06b6d4" />
+        {/* 3D WebGL Travel Globe Canvas */}
+        <Canvas
+          camera={{ position: [0, 0, 6.6], fov: 42 }}
+          className="cursor-grab active:cursor-grabbing w-full h-full bg-black"
+          gl={{ antialias: true, powerPreference: 'high-performance' }}
+        >
+          <color attach="background" args={['#000000']} />
+          <ambientLight intensity={1.3} />
+          <directionalLight position={[6, 4, 5]} intensity={2.6} />
+          <directionalLight position={[-6, -3, -4]} intensity={0.5} color="#06b6d4" />
 
-            <Suspense fallback={<GlobeFallback />}>
-              <TravelGlobeScene
-                currentLevel={currentLevel}
-                selectedCountry={selectedCountry}
-                selectedCity={selectedCity}
-                selectedAttraction={selectedAttraction}
-                runtimeMarker={runtimeMarker}
-                countries={COUNTRIES}
-                cities={CITIES}
-                attractions={ATTRACTIONS}
-                flightRoutes={FEATURED_FLIGHT_ROUTES}
-                isAutoRotate={isAutoRotate}
-                isFlying={isFlying}
-                setIsFlying={setIsFlying}
-                onSelectCountry={handleSelectCountry}
-                onSelectCity={handleSelectCity}
-                onSelectAttraction={handleSelectAttraction}
-                controlsRef={controlsRef}
-                onUserDragStart={handleUserDragStart}
-                onUserDragEnd={handleUserDragEnd}
-              />
-            </Suspense>
-          </Canvas>
-        )}
+          <Suspense fallback={<GlobeFallback />}>
+            <TravelGlobeScene
+              currentLevel={currentLevel}
+              selectedCountry={selectedCountry}
+              selectedCity={selectedCity}
+              selectedAttraction={selectedAttraction}
+              runtimeMarker={runtimeMarker}
+              countries={COUNTRIES}
+              cities={CITIES}
+              attractions={ATTRACTIONS}
+              flightRoutes={FEATURED_FLIGHT_ROUTES}
+              isAutoRotate={isAutoRotate}
+              isFlying={isFlying}
+              setIsFlying={setIsFlying}
+              onSelectCountry={handleSelectCountry}
+              onSelectCity={handleSelectCity}
+              onSelectAttraction={handleSelectAttraction}
+              controlsRef={controlsRef}
+              onUserDragStart={handleUserDragStart}
+              onUserDragEnd={handleUserDragEnd}
+            />
+          </Suspense>
+        </Canvas>
 
         {/* 3. Floating Location Information Panel (Country / City / Destination) */}
         {isPanelOpen && (
@@ -322,11 +308,6 @@ export function GoogleEarthGlobe({ onSelectDestination }) {
             onSelectAttraction={handleSelectAttraction}
             onClose={() => setIsPanelOpen(false)}
             onOpenFullDetail={onSelectDestination}
-            onSwitchToGoogleMaps={(loc) => {
-              setEngineMode('google');
-              setSelectedLocation(loc);
-              setIsPanelOpen(true);
-            }}
           />
         )}
 

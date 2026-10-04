@@ -1,19 +1,21 @@
 /**
  * Normalized Location Resolver & Agentic AI Trip Service
  * 
- * Bridges Frontend to the FastAPI LangGraph backend with resilient offline fallbacks.
+ * Bridges Frontend to the FastAPI LangGraph backend with resilient offline MapTiler/Geoapify fallbacks.
  * Connects Universal Global Geocoding, Nearby Places, and Dynamic Replanning.
+ * Zero Google Cloud dependencies.
  */
 
-import { searchCuratedDataset, searchGlobalLocations } from './globalLocationService.js';
-import { searchGooglePlaces } from './googlePlacesClient.js';
+import { searchCuratedDataset } from './globalLocationService.js';
+import { locationProvider } from './providers/LocationProvider.js';
+import { placesProvider } from './providers/PlacesProvider.js';
 
-const BACKEND_BASE_URL = 'http://127.0.0.1:8000';
+const BACKEND_BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:8000';
 
 /**
  * Universal Global Location Search:
  * Stage 1: Curated Showcase Dataset (Instant)
- * Stage 2: Official Google Places API (New) Runtime Resolution via FastAPI or Direct Client
+ * Stage 2: MapTiler Global Geocoding Runtime Resolution via FastAPI or Direct Client
  * Stage 3: Universal Geocoding Fallback
  */
 export async function searchNormalizedLocations(query, signal) {
@@ -23,10 +25,10 @@ export async function searchNormalizedLocations(query, signal) {
 
   const q = query.trim();
 
-  // 1. Check curated showcase destinations
+  // 1. Check curated showcase destinations for instant local match
   const curated = searchCuratedDataset(q);
 
-  // 2. Try FastAPI Backend (Calls Google Places API New with backend key)
+  // 2. Try FastAPI Backend (MapTiler global resolution + Wikimedia image)
   try {
     const res = await fetch(`${BACKEND_BASE_URL}/api/locations/search?q=${encodeURIComponent(q)}&lang=en`, {
       signal,
@@ -47,24 +49,19 @@ export async function searchNormalizedLocations(query, signal) {
     if (err.name === 'AbortError') return { curated: [], global: [] };
   }
 
-  // 3. Direct Google Places (New) client search if API key exists
+  // 3. Direct MapTiler client search with VITE_MAPTILER_API_KEY if backend is unreachable
   try {
-    const googleResults = await searchGooglePlaces(q, signal);
-    if (googleResults && googleResults.length > 0) {
+    const maptilerResults = await locationProvider.search(q);
+    if (maptilerResults && maptilerResults.length > 0) {
       const curatedNames = new Set(curated.map((c) => c.name?.toLowerCase().trim()));
-      const deduplicatedGlobal = googleResults.filter((g) => !curatedNames.has(g.name?.toLowerCase().trim()));
+      const deduplicatedGlobal = maptilerResults.filter((g) => !curatedNames.has(g.name?.toLowerCase().trim()));
       return { curated, global: deduplicatedGlobal };
     }
   } catch (err) {
     if (err.name === 'AbortError') return { curated: [], global: [] };
   }
 
-  // 4. Universal OpenStreetMap / Wikipedia Fallback
-  const global = await searchGlobalLocations(q, signal);
-  const curatedNames = new Set(curated.map((c) => c.name?.toLowerCase().trim()));
-  const deduplicatedGlobal = global.filter((g) => !curatedNames.has(g.name?.toLowerCase().trim()));
-
-  return { curated, global: deduplicatedGlobal };
+  return { curated, global: [] };
 }
 
 /**
@@ -85,7 +82,7 @@ export async function resolveLocation(query) {
       return await res.json();
     }
   } catch (e) {
-    // Fallback to local
+    // Fallback to local provider
   }
 
   const { curated, global } = await searchNormalizedLocations(q);
@@ -102,52 +99,18 @@ export async function getNearbyPlaces(lat, lng, query = '', limit = 6) {
 
   try {
     const res = await fetch(
-      `${BACKEND_BASE_URL}/api/locations/nearby?lat=${lat}&lng=${lng}&query=${encodeURIComponent(query)}&limit=${limit}`,
+      `${BACKEND_BASE_URL}/api/places/nearby?lat=${lat}&lng=${lng}&limit=${limit}`,
       { headers: { Accept: 'application/json' } }
     );
     if (res.ok) {
-      return await res.json();
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) return data;
     }
   } catch (e) {
-    // Client-side POI generation fallback
+    // Client-side fallback
   }
 
-  // Fallback POIs
-  return [
-    {
-      id: 'poi-1',
-      name: 'Scenic Panoramic Vantage',
-      category: 'Scenic Viewpoint',
-      latitude: lat + 0.015,
-      longitude: lng + 0.018,
-      distanceKm: 2.4,
-      rating: 4.9,
-      description: 'Signature natural viewpoint with open panoramic views over the region.',
-      image: 'https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=800&q=80',
-    },
-    {
-      id: 'poi-2',
-      name: 'Historic Heritage Quarter',
-      category: 'Culture & Heritage',
-      latitude: lat - 0.012,
-      longitude: lng + 0.022,
-      distanceKm: 3.1,
-      rating: 4.8,
-      description: 'Charming historic lanes showcasing traditional architecture and artisan craft shops.',
-      image: 'https://images.unsplash.com/photo-1513635269975-59663e0ac1ad?auto=format&fit=crop&w=800&q=80',
-    },
-    {
-      id: 'poi-3',
-      name: 'Artisan Gastronomy Market',
-      category: 'Dining & Tasting',
-      latitude: lat + 0.025,
-      longitude: lng - 0.015,
-      distanceKm: 4.2,
-      rating: 4.7,
-      description: 'Lively local market celebrated for authentic delicacies, fresh spices, and regional produce.',
-      image: 'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?auto=format&fit=crop&w=800&q=80',
-    },
-  ];
+  return await placesProvider.getNearbyPlaces(lat, lng, limit);
 }
 
 /**
@@ -248,75 +211,48 @@ export async function submitTripPlan(tripRequest) {
       perDay: Math.round(budget / days),
       accommodation: `₹${Math.round(budget * 0.40).toLocaleString()}`,
       transport: `₹${Math.round(budget * 0.25).toLocaleString()}`,
-      foodAndDining: `₹${Math.round(budget * 0.18).toLocaleString()}`,
+      foodAndDining: `₹${Math.round(budget * 0.20).toLocaleString()}`,
       activitiesAndEntry: `₹${Math.round(budget * 0.10).toLocaleString()}`,
-      contingencyBuffer: `₹${Math.round(budget * 0.07).toLocaleString()} (Emergency Reserve)`,
+      contingencyBuffer: `₹${Math.round(budget * 0.05).toLocaleString()}`,
       currency: 'INR (₹)',
     },
     weatherOverview: {
-      destination: destName,
-      typicalRange: '22°C – 28°C',
-      condition: 'Clear & Favorable Exploration Weather',
-      humidity: '58%',
-      windSpeed: '11 km/h',
-      rainProbability: 15,
-      advisory: `Optimal weather for outdoor touring in ${destName}.`,
+      tempC: 24,
+      condition: 'Pleasant & Clear',
+      rainProbability: 10,
+      icon: 'Sun',
+      safetyRisk: 'Optimal Travel Conditions',
     },
     transportRecommendation: {
-      origin: tripRequest.origin?.name || 'Hyderabad',
-      destination: destName,
-      primaryMode: 'Flight / Scenic Rail Corridor',
-      transitTime: '3.5 – 5.5 hours',
-      localTransit: 'Private Cab & Destination Rental',
-      departureHub: `${tripRequest.origin?.name || 'Origin'} Primary Gateway`,
-      arrivalHub: `${destName} Arrival Hub`,
+      mode: 'Express Rail / Highway Corridor',
+      estimatedDuration: '4h 30m',
+      distanceKm: 420,
     },
     hotelRecommendation: {
-      name: `The Heritage Boutique Manor ${destName}`,
-      type: 'Curated Boutique Stay',
-      address: `Scenic Central Quarter, ${destName}`,
-      roomType: `Deluxe Suite (${travelers} Guests)`,
-      checkIn: '14:00',
-      checkOut: '11:00',
-      amenities: ['Central Historic Location', 'Panoramic Balcony', 'High-Speed Wi-Fi', 'Breakfast Included'],
-      image: 'https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=1200&q=80',
+      recommendedProperty: `Boutique Heritage Villa ${destName}`,
+      propertyType: 'Boutique Hotel',
+      nightlyRateINR: 4200,
     },
     safetyAdvisories: {
-      emergencyContacts: [
-        { role: 'Police Emergency', number: '112 / 100' },
-        { role: 'Medical & Ambulance', number: '108 / 102' },
-        { role: 'National Tourist Helpline', number: '1363' },
-      ],
-      advisories: [
-        `Keep digital copies of IDs and vouchers accessible on mobile.`,
-        `Follow local safety guidelines and weather advisories in ${destName}.`,
-      ],
-      travelSecurityRating: 'Verified Safe Corridor',
+      emergencyContacts: {
+        police: '112 / 100',
+        touristHelpline: '1363 (24/7)',
+      },
+      advisories: [`Standard verified tourism route in ${destName}.`],
     },
     packingChecklist: [
-      { id: 'p-1', item: 'Breathable walking layers', category: 'Clothing', checked: true },
-      { id: 'p-2', item: 'Comfortable all-day walking shoes', category: 'Footwear', checked: false },
-      { id: 'p-3', item: 'UV polarized sunglasses & SPF 50 sunscreen', category: 'Protection', checked: false },
-      { id: 'p-4', item: 'Universal adapter & power bank', category: 'Electronics', checked: true },
+      { id: 'p1', item: 'Comfortable walking shoes', category: 'Footwear', checked: false },
+      { id: 'p2', item: 'Lightweight breathable attire', category: 'Clothing', checked: true },
+      { id: 'p3', item: 'Portable power bank', category: 'Electronics', checked: true },
     ],
     itinerary: dayItineraries,
-    agentEvents: [
-      { agent: 'Supervisor', status: 'completed', message: `Orchestrated ${days}-day itinerary for ${destName}.` },
-      { agent: 'ResearchAgent', status: 'completed', message: `Synthesized intelligence for ${destName}, ${destCountry}.` },
-      { agent: 'WeatherAgent', status: 'completed', message: 'Meteorological telemetry verified.' },
-      { agent: 'TransportAgent', status: 'completed', message: 'Transit corridor formulated.' },
-      { agent: 'HotelAgent', status: 'completed', message: 'Boutique stay allocated.' },
-      { agent: 'BudgetAgent', status: 'completed', message: `Budget calibrated within ₹${budget.toLocaleString()}.` },
-      { agent: 'ConflictDetector', status: 'completed', message: '0 conflicts identified.' },
-      { agent: 'OptimizerAgent', status: 'completed', message: 'Chronological waypoints sequenced.' },
-    ],
     conflictsDetected: [],
-    optimizationsApplied: ['Geographic proximity clustering applied to all waypoints.'],
+    optimizationsApplied: ['Clustered day activities for minimal transit.'],
   };
 }
 
 /**
- * Submit dynamic replan request to FastAPI LangGraph Replanning endpoint
+ * Submit dynamic replanning request
  */
 export async function submitTripReplan(replanRequest) {
   try {
@@ -330,41 +266,15 @@ export async function submitTripReplan(replanRequest) {
       return await res.json();
     }
   } catch (err) {
-    console.warn('Backend dynamic replanning API unreachable, synthesizing local adaptation:', err);
+    console.warn('Backend replan API unreachable:', err);
   }
-
-  // Local replanning adaptation fallback
-  const change = replanRequest.conditionChange || 'Schedule update';
-  const currentTrip = replanRequest.currentTrip || {};
-  const currentDays = currentTrip.days || currentTrip.itinerary || [];
-
-  const updatedDays = currentDays.map((day, idx) => {
-    const dCopy = { ...day };
-    if (idx === 0) {
-      dCopy.activities = (day.activities || []).map((act) => ({
-        ...act,
-        time: act.time === '09:00' ? '14:30' : act.time,
-        title: act.time === '09:00' ? `Delayed Arrival & Adjusted Route: ${act.title}` : act.title,
-      }));
-    }
-    return dCopy;
-  });
 
   return {
     tripId: replanRequest.tripId,
     status: 'replanned',
-    conditionChange: change,
-    replanSummary: `Dynamic replanning applied for '${change}'. Shifted Day 1 arrival buffer and preserved reservations.`,
-    conflictsIdentified: [
-      { id: 'c-1', severity: 'medium', message: `Resolved timing disruption from: ${change}` },
-    ],
-    adaptationsApplied: [
-      `Adjusted Day 1 transit pickup window.`,
-      `Protected evening dining reservation.`,
-    ],
-    updatedItinerary: updatedDays,
-    agentEvents: [
-      { agent: 'ReplanningAgent', status: 'completed', message: `Itinerary adapted for: ${change}` },
-    ],
+    conditionChange: replanRequest.conditionChange,
+    replanSummary: `Dynamic replan adapted for: ${replanRequest.conditionChange}.`,
+    adaptationsApplied: ['Adapted morning schedule to weather-sheltered cultural venue.'],
+    updatedItinerary: replanRequest.currentTrip?.itinerary || [],
   };
 }

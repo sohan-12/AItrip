@@ -4,6 +4,8 @@ from langgraph.graph import StateGraph, START, END
 
 from backend.agents.state import TripPlanningState
 from backend.agents.specialized import (
+    memory_agent_node,
+    planner_agent_node,
     research_agent_node,
     weather_agent_node,
     transport_agent_node,
@@ -12,6 +14,7 @@ from backend.agents.specialized import (
     safety_agent_node,
     budget_agent_node,
     conflict_detector_node,
+    packing_agent_node,
     optimizer_node,
     replanning_node,
 )
@@ -27,6 +30,8 @@ from backend.models.location import (
 
 # 1. Build Main Trip Planning StateGraph
 workflow = StateGraph(TripPlanningState)
+workflow.add_node("memory", memory_agent_node)
+workflow.add_node("planner", planner_agent_node)
 workflow.add_node("research", research_agent_node)
 workflow.add_node("weather", weather_agent_node)
 workflow.add_node("transport", transport_agent_node)
@@ -35,9 +40,12 @@ workflow.add_node("experiences", experiences_agent_node)
 workflow.add_node("safety", safety_agent_node)
 workflow.add_node("budget", budget_agent_node)
 workflow.add_node("conflict_detector", conflict_detector_node)
+workflow.add_node("packing", packing_agent_node)
 workflow.add_node("optimizer", optimizer_node)
 
-workflow.add_edge(START, "research")
+workflow.add_edge(START, "memory")
+workflow.add_edge("memory", "planner")
+workflow.add_edge("planner", "research")
 workflow.add_edge("research", "weather")
 workflow.add_edge("weather", "transport")
 workflow.add_edge("transport", "hotel")
@@ -45,7 +53,8 @@ workflow.add_edge("hotel", "experiences")
 workflow.add_edge("experiences", "safety")
 workflow.add_edge("safety", "budget")
 workflow.add_edge("budget", "conflict_detector")
-workflow.add_edge("conflict_detector", "optimizer")
+workflow.add_edge("conflict_detector", "packing")
+workflow.add_edge("packing", "optimizer")
 workflow.add_edge("optimizer", END)
 
 plan_graph = workflow.compile()
@@ -62,149 +71,182 @@ replan_workflow.add_edge("replan", END)
 replan_graph = replan_workflow.compile()
 
 class SupervisorAgent:
-    """
-    Supervisor Agent for AITrip Global Agentic AI Travel Planner.
-    Orchestrates the LangGraph multi-agent pipeline:
-    Research -> Weather -> Transport -> Hotel -> Experiences -> Safety -> Budget -> Conflict Detector -> Optimizer
-    """
-
-    @classmethod
-    async def orchestrate_plan(cls, request: TripPlanRequest) -> TripPlanResponse:
+    @staticmethod
+    async def orchestrate_plan(req: TripPlanRequest) -> TripPlanResponse:
         trip_id = f"trip-{uuid.uuid4().hex[:8]}"
 
-        # Initialize LangGraph state
         initial_state: TripPlanningState = {
-            "origin": request.origin.model_dump(),
-            "destination": request.destination.model_dump(),
-            "duration_days": request.durationDays,
-            "travelers": request.travelers,
-            "budget": request.budget,
-            "budget_tier": request.budgetTier or "Comfort (Curated Boutique)",
-            "travel_style": request.travelStyle or "Bespoke Cultural & Scenic Discovery",
-            "pace": request.pace or "Moderate (Balanced Exploration)",
-            "preferences": request.preferences,
-            "user_prompt": request.userPrompt,
+            "origin": req.origin.dict(),
+            "destination": req.destination.dict(),
+            "duration_days": req.durationDays,
+            "travelers": req.travelers,
+            "budget": req.budget,
+            "budget_tier": req.budgetTier or "Comfort (Curated Boutique)",
+            "travel_style": req.travelStyle or "Bespoke Cultural & Scenic Discovery",
+            "pace": req.pace or "Moderate (Balanced Exploration)",
+            "preferences": req.preferences or ["nature", "culture", "culinary"],
+            "user_prompt": req.userPrompt,
             "agent_events": [
                 {
-                    "agent": "Supervisor",
+                    "agent": "SupervisorAgent",
                     "status": "initiated",
-                    "message": f"Orchestrating autonomous LangGraph multi-agent pipeline for {request.destination.name}, {request.destination.country}.",
+                    "message": f"Orchestrating autonomous LangGraph multi-agent planning pipeline for {req.destination.name} ({req.durationDays} Days, {req.travelers} Travelers).",
+                    "timestamp": "00:00:01",
                 }
             ],
         }
 
-        # Run compiled LangGraph workflow asynchronously
+        # Execute LangGraph plan
         final_state = await plan_graph.ainvoke(initial_state)
 
-        # Convert raw dicts to Pydantic models
-        itinerary_models: List[DayItinerary] = []
-        for day in final_state.get("itinerary", []):
-            waypoints = [ItineraryWaypoint(**act) for act in day.get("activities", [])]
-            itinerary_models.append(
-                DayItinerary(
-                    day=day.get("day", 1),
-                    title=day.get("title", f"Day {day.get('day', 1)}"),
-                    theme=day.get("theme"),
-                    morning=day.get("morning"),
-                    afternoon=day.get("afternoon"),
-                    evening=day.get("evening"),
-                    diningRecommendation=day.get("diningRecommendation"),
-                    activities=waypoints,
-                )
-            )
-
-        events = [AgentTelemetryEvent(**ev) for ev in final_state.get("agent_events", [])]
-
-        return TripPlanResponse(
-            tripId=trip_id,
-            status="completed",
-            origin=request.origin,
-            destination=request.destination,
-            summary=final_state.get("summary", ""),
-            durationDays=request.durationDays,
-            travelers=request.travelers,
-            estimatedBudget=final_state.get("budget_breakdown", {}),
-            weatherOverview=final_state.get("weather", {}),
-            transportRecommendation=final_state.get("transport", {}),
-            hotelRecommendation=final_state.get("hotel", {}),
-            safetyAdvisories=final_state.get("safety", {}),
-            packingChecklist=final_state.get("packing_checklist", []),
-            itinerary=itinerary_models,
-            agentEvents=events,
-            conflictsDetected=final_state.get("conflicts", []),
-            optimizationsApplied=final_state.get("optimizations", []),
-        )
-
-    @classmethod
-    async def replan_trip(cls, request: TripReplanRequest) -> TripReplanResponse:
-        current_trip = request.currentTrip or {}
-        days_data = current_trip.get("days", [])
-        if not days_data and "itinerary" in current_trip:
-            days_data = current_trip.get("itinerary", [])
-
-        replan_state: TripPlanningState = {
-            "origin": current_trip.get("origin", {"name": "Hyderabad"}),
-            "destination": current_trip.get("destination", {"name": current_trip.get("destinationName", "Destination")}),
-            "duration_days": current_trip.get("durationDays", len(days_data) or 4),
-            "travelers": current_trip.get("travelers", 2),
-            "budget": current_trip.get("budget", {}).get("total", 30000.0) if isinstance(current_trip.get("budget"), dict) else 30000.0,
-            "condition_change": request.conditionChange,
-            "disruption_type": request.disruptionType,
-            "itinerary": days_data,
-            "agent_events": [
-                {
-                    "agent": "Supervisor",
-                    "status": "initiated",
-                    "message": f"Supervising dynamic replan: disruption '{request.conditionChange}' received.",
-                }
-            ],
-            "conflicts": [],
-        }
-
-        replan_result = await replan_graph.ainvoke(replan_state)
-
-        updated_days: List[DayItinerary] = []
-        for day in replan_result.get("itinerary", []):
+        # Convert itinerary to Pydantic models
+        itinerary_days: List[DayItinerary] = []
+        for d in final_state.get("itinerary", []):
             waypoints = []
-            for act in day.get("activities", []):
+            for act in d.get("activities", []):
                 waypoints.append(
                     ItineraryWaypoint(
-                        id=act.get("id", str(uuid.uuid4())[:8]),
-                        time=act.get("time", "10:00"),
-                        title=act.get("title", "Adjusted Activity"),
-                        description=act.get("description", ""),
-                        location=act.get("location", ""),
-                        lat=float(act.get("lat", 0.0)),
-                        lng=float(act.get("lng", 0.0)),
-                        category=act.get("category", "Activity"),
-                        cost=float(act.get("cost", 0.0)),
-                        duration=act.get("duration", "1.5 hours"),
+                        id=act["id"],
+                        time=act["time"],
+                        title=act["title"],
+                        description=act["description"],
+                        location=act["location"],
+                        lat=act["lat"],
+                        lng=act["lng"],
+                        category=act["category"],
+                        cost=act.get("cost", 0.0),
+                        duration=act.get("duration", "2 hours"),
                         transitTime=act.get("transitTime", "15 mins"),
                         icon=act.get("icon", "Compass"),
                     )
                 )
-            updated_days.append(
+
+            itinerary_days.append(
                 DayItinerary(
-                    day=day.get("day", 1),
-                    title=day.get("title", f"Day {day.get('day', 1)}"),
-                    theme=day.get("theme"),
-                    morning=day.get("morning"),
-                    afternoon=day.get("afternoon"),
-                    evening=day.get("evening"),
-                    diningRecommendation=day.get("diningRecommendation"),
+                    day=d["day"],
+                    title=d["title"],
+                    theme=d.get("theme"),
+                    morning=d.get("morning"),
+                    afternoon=d.get("afternoon"),
+                    evening=d.get("evening"),
+                    diningRecommendation=d.get("diningRecommendation"),
                     activities=waypoints,
                 )
             )
 
-        events = [AgentTelemetryEvent(**ev) for ev in replan_result.get("agent_events", [])]
+        # Convert agent events
+        telemetry: List[AgentTelemetryEvent] = []
+        for ev in final_state.get("agent_events", []):
+            telemetry.append(
+                AgentTelemetryEvent(
+                    agent=ev.get("agent", "Agent"),
+                    status=ev.get("status", "completed"),
+                    message=ev.get("message", ""),
+                    timestamp=ev.get("timestamp", ""),
+                    details=ev.get("details"),
+                )
+            )
+
+        return TripPlanResponse(
+            tripId=trip_id,
+            status="completed",
+            origin=req.origin,
+            destination=req.destination,
+            summary=final_state.get("summary", f"Custom tailored itinerary for {req.destination.name}"),
+            durationDays=req.durationDays,
+            travelers=req.travelers,
+            estimatedBudget=final_state.get("budget_analysis", {}),
+            weatherOverview=final_state.get("weather_data", {}),
+            transportRecommendation=final_state.get("transport_options", {}),
+            hotelRecommendation=final_state.get("hotel_options", {}),
+            safetyAdvisories=final_state.get("safety_information", {}),
+            packingChecklist=final_state.get("packing_list", []),
+            itinerary=itinerary_days,
+            agentEvents=telemetry,
+            conflictsDetected=final_state.get("conflicts", []),
+            optimizationsApplied=final_state.get("optimizations", []),
+        )
+
+    @staticmethod
+    async def replan_trip(req: TripReplanRequest) -> TripReplanResponse:
+        current = req.currentTrip
+        dest = current.get("destination", {})
+        if isinstance(dest, str):
+            dest = {"name": dest, "latitude": 20.0, "longitude": 78.0}
+
+        replan_state: TripPlanningState = {
+            "destination": dest,
+            "condition_change": req.conditionChange,
+            "disruption_type": req.disruptionType,
+            "itinerary": current.get("itinerary", []),
+            "weather_data": current.get("weatherOverview", {}),
+            "budget_analysis": current.get("estimatedBudget", {}),
+            "agent_events": [
+                {
+                    "agent": "SupervisorAgent",
+                    "status": "initiated",
+                    "message": f"Supervisor triggered dynamic replanning: {req.conditionChange} (Severity: {req.severity}).",
+                    "timestamp": "00:00:01",
+                }
+            ],
+        }
+
+        replan_output = await replan_graph.ainvoke(replan_state)
+
+        updated_days: List[DayItinerary] = []
+        for d in replan_output.get("updated_itinerary", []):
+            waypoints = []
+            for act in d.get("activities", []):
+                waypoints.append(
+                    ItineraryWaypoint(
+                        id=act.get("id", str(uuid.uuid4())[:8]),
+                        time=act.get("time", "10:00"),
+                        title=act.get("title", ""),
+                        description=act.get("description", ""),
+                        location=act.get("location", ""),
+                        lat=act.get("lat", 0.0),
+                        lng=act.get("lng", 0.0),
+                        category=act.get("category", "Activity"),
+                        cost=act.get("cost", 0.0),
+                        duration=act.get("duration", "2 hours"),
+                        transitTime=act.get("transitTime", "15 mins"),
+                        icon=act.get("icon", "Compass"),
+                    )
+                )
+
+            updated_days.append(
+                DayItinerary(
+                    day=d.get("day", 1),
+                    title=d.get("title", f"Day {d.get('day', 1)}"),
+                    theme=d.get("theme"),
+                    morning=d.get("morning"),
+                    afternoon=d.get("afternoon"),
+                    evening=d.get("evening"),
+                    diningRecommendation=d.get("diningRecommendation"),
+                    activities=waypoints,
+                )
+            )
+
+        telemetry: List[AgentTelemetryEvent] = []
+        for ev in replan_output.get("agent_events", []):
+            telemetry.append(
+                AgentTelemetryEvent(
+                    agent=ev.get("agent", "ReplanningAgent"),
+                    status=ev.get("status", "replanned"),
+                    message=ev.get("message", ""),
+                    timestamp=ev.get("timestamp", ""),
+                    details=ev.get("details"),
+                )
+            )
 
         return TripReplanResponse(
-            tripId=request.tripId,
+            tripId=req.tripId,
             status="replanned",
-            conditionChange=request.conditionChange,
-            replanSummary=replan_result.get("replan_summary", "Dynamic replan complete."),
-            conflictsIdentified=replan_result.get("conflicts", []),
-            adaptationsApplied=replan_result.get("adaptations_applied", []),
+            conditionChange=req.conditionChange,
+            replanSummary=replan_output.get("replan_summary", f"Itinerary adapted for {req.conditionChange}"),
+            conflictsIdentified=replan_output.get("conflicts", []),
+            adaptationsApplied=replan_output.get("adaptations_applied", []),
             updatedItinerary=updated_days,
-            agentEvents=events,
+            updatedBudget=current.get("estimatedBudget"),
+            agentEvents=telemetry,
         )

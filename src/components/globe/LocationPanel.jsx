@@ -29,7 +29,6 @@ export function LocationPanel({
   onSelectAttraction,
   onClose,
   onOpenFullDetail,
-  onSwitchToGoogleMaps,
 }) {
   const navigate = useNavigate();
   const [nearbyPlaces, setNearbyPlaces] = useState([]);
@@ -454,17 +453,6 @@ export function LocationPanel({
           <span>PLAN A TRIP TO {displayItem.name.toUpperCase()}</span>
           <ArrowRight className="w-4 h-4" />
         </button>
-
-        {onSwitchToGoogleMaps && (
-          <button
-            onClick={() => onSwitchToGoogleMaps(displayItem)}
-            className="px-3.5 py-3 rounded-full bg-slate-800/90 hover:bg-cyan-500 hover:text-black text-cyan-300 border border-cyan-400/40 transition-all flex items-center justify-center gap-1.5 cursor-pointer font-bold text-xs shadow-lg"
-            title="Open in Google Maps / Satellite View with Target Goal Pin"
-          >
-            <Navigation className="w-4 h-4" />
-            <span className="hidden sm:inline font-mono text-[11px]">GOAL PIN</span>
-          </button>
-        )}
 
         {onOpenFullDetail && (
           <button

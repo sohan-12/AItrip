@@ -1,10 +1,9 @@
 /**
- * LocationProvider Abstraction Layer
- * Supports GoogleLocationProvider, GeographicDatasetProvider, and NominatimLocationProvider.
+ * MapTilerLocationProvider & BaseLocationProvider Abstraction Layer
+ * Pure global geocoding and location resolution without Google Cloud dependencies.
  */
 
-import { GeographicDataProvider } from './GeographicDataProvider.js';
-import { COUNTRIES, CITIES, ATTRACTIONS } from '../../components/globe/globeData.js';
+import { COUNTRIES, CITIES } from '../../components/globe/globeData.js';
 
 export class BaseLocationProvider {
   async search(query) {
@@ -17,247 +16,118 @@ export class BaseLocationProvider {
 }
 
 /**
- * GoogleLocationProvider
- * Interfaces with Google Maps Geocoding and Places API
+ * MapTilerLocationProvider
+ * Interfaces with MapTiler Cloud Geocoding API with Nominatim geographic fallback
  */
-export class GoogleLocationProvider extends BaseLocationProvider {
+export class MapTilerLocationProvider extends BaseLocationProvider {
   constructor(apiKey) {
     super();
-    this.apiKey = apiKey || import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '';
+    this.apiKey = apiKey || import.meta.env.VITE_MAPTILER_API_KEY || '';
   }
 
   isAvailable() {
-    return Boolean(this.apiKey && this.apiKey !== 'YOUR_GOOGLE_MAPS_API_KEY');
-  }
-
-  async search(query) {
-    if (!this.isAvailable()) return [];
-
-    try {
-      // If Google Maps JS SDK is already loaded in browser window
-      if (window.google?.maps?.places) {
-        const autocompleteService = new window.google.maps.places.AutocompleteService();
-        return new Promise((resolve) => {
-          autocompleteService.getPlacePredictions(
-            { input: query },
-            async (predictions, status) => {
-              if (status !== window.google.maps.places.PlacesServiceStatus.OK || !predictions) {
-                return resolve([]);
-              }
-
-              const results = [];
-              const geocoder = new window.google.maps.Geocoder();
-
-              for (const p of predictions.slice(0, 5)) {
-                try {
-                  const geoRes = await new Promise((r) =>
-                    geocoder.geocode({ placeId: p.place_id }, (res, stat) => {
-                      r(stat === 'OK' && res?.[0] ? res[0] : null);
-                    })
-                  );
-
-                  if (geoRes) {
-                    const lat = geoRes.geometry.location.lat();
-                    const lng = geoRes.geometry.location.lng();
-                    let country = 'World';
-                    let region = '';
-
-                    geoRes.address_components?.forEach((comp) => {
-                      if (comp.types.includes('country')) country = comp.long_name;
-                      if (comp.types.includes('administrative_area_level_1')) region = comp.long_name;
-                    });
-
-                    results.push({
-                      id: `google-${p.place_id}`,
-                      name: p.structured_formatting?.main_text || p.description.split(',')[0],
-                      formattedName: p.description,
-                      country,
-                      region,
-                      latitude: lat,
-                      longitude: lng,
-                      type: p.types?.[0] || 'city',
-                      source: 'google',
-                      curated: false,
-                      providerId: p.place_id,
-                    });
-                  }
-                } catch {
-                  // Continue gracefully
-                }
-              }
-              resolve(results);
-            }
-          );
-        });
-      }
-
-      // If backend Google geocoding endpoint is configured
-      const res = await fetch(`http://127.0.0.1:8000/api/locations/search?q=${encodeURIComponent(query)}`);
-      if (res.ok) {
-        const data = await res.json();
-        return data.results || [];
-      }
-    } catch (err) {
-      console.warn('GoogleLocationProvider search error, falling back:', err);
-    }
-    return [];
-  }
-}
-
-/**
- * GeographicDatasetLocationProvider
- * Handles curated destinations and natural physical geographic entities (Oceans, Seas, Mountains, Deserts)
- */
-export class GeographicDatasetLocationProvider extends BaseLocationProvider {
-  async search(query) {
-    if (!query) return [];
-    const q = query.toLowerCase().trim();
-
-    // 1. Natural features & global entities
-    const naturalMatches = GeographicDataProvider.search(query);
-
-    // 2. Curated Countries
-    const countryMatches = COUNTRIES.filter(
-      (c) => c.name.toLowerCase().includes(q) || c.id.toLowerCase().includes(q)
-    ).map((c) => ({
-      id: c.id,
-      name: c.name,
-      formattedName: `${c.name} (${c.flag || '🌍'})`,
-      country: c.name,
-      region: 'Country',
-      latitude: c.lat,
-      longitude: c.lng,
-      type: 'country',
-      source: 'curated',
-      curated: true,
-      zoomLevel: 'country',
-      cameraDistance: 5.1,
-    }));
-
-    // 3. Curated Cities
-    const cityMatches = CITIES.filter(
-      (c) => c.name.toLowerCase().includes(q) || c.country?.toLowerCase().includes(q)
-    ).map((c) => ({
-      id: c.id,
-      name: c.name,
-      formattedName: `${c.name}, ${c.country}`,
-      country: c.country,
-      region: c.region || c.state || 'City',
-      latitude: c.lat,
-      longitude: c.lng,
-      type: 'city',
-      source: 'curated',
-      curated: true,
-      zoomLevel: 'city',
-      cameraDistance: 4.3,
-    }));
-
-    // 4. Curated Attractions
-    const attractionMatches = ATTRACTIONS.filter(
-      (a) => a.name.toLowerCase().includes(q) || a.city?.toLowerCase().includes(q)
-    ).map((a) => ({
-      id: a.id,
-      name: a.name,
-      formattedName: `${a.name}, ${a.city}`,
-      country: a.country || 'World',
-      region: a.city,
-      latitude: a.lat,
-      longitude: a.lng,
-      type: 'landmark',
-      source: 'curated',
-      curated: true,
-      zoomLevel: 'landmark',
-      cameraDistance: 3.85,
-    }));
-
-    return [...naturalMatches, ...countryMatches, ...cityMatches, ...attractionMatches];
-  }
-}
-
-/**
- * NominatimLocationProvider
- * OpenStreetMap worldwide geocoding fallback for 100% resilient global search
- */
-export class NominatimLocationProvider extends BaseLocationProvider {
-  async search(query) {
-    if (!query || query.length < 2) return [];
-
-    try {
-      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
-        query
-      )}&addressdetails=1&limit=5`;
-      const res = await fetch(url, {
-        headers: { 'Accept-Language': 'en' },
-      });
-
-      if (!res.ok) return [];
-      const items = await res.json();
-
-      return items.map((item) => {
-        const address = item.address || {};
-        const country = address.country || 'World';
-        const region = address.state || address.county || address.region || '';
-        const name = item.name || item.display_name.split(',')[0].trim();
-
-        let placeType = 'city';
-        if (item.type === 'country' || item.class === 'boundary') placeType = 'country';
-        else if (item.class === 'natural') placeType = 'natural_feature';
-        else if (item.class === 'tourism' || item.class === 'historic') placeType = 'landmark';
-
-        return {
-          id: `osm-${item.place_id}`,
-          name,
-          formattedName: item.display_name,
-          country,
-          region,
-          latitude: parseFloat(item.lat),
-          longitude: parseFloat(item.lon),
-          type: placeType,
-          source: 'nominatim',
-          curated: false,
-          providerId: String(item.place_id),
-          zoomLevel: placeType === 'country' ? 'country' : placeType === 'landmark' ? 'landmark' : 'city',
-          cameraDistance: placeType === 'country' ? 5.1 : placeType === 'landmark' ? 3.85 : 4.3,
-        };
-      });
-    } catch {
-      return [];
-    }
-  }
-}
-
-/**
- * Unified Location Service Orchestrator
- */
-class UnifiedLocationService {
-  constructor() {
-    this.googleProvider = new GoogleLocationProvider();
-    this.datasetProvider = new GeographicDatasetLocationProvider();
-    this.nominatimProvider = new NominatimLocationProvider();
+    return Boolean(this.apiKey);
   }
 
   async search(query) {
     if (!query || !query.trim()) return [];
     const q = query.trim();
 
-    // Layer 1: Curated & Geographic Datasets (Oceans, Seas, Mountains, Curated Cities)
-    const datasetResults = await this.datasetProvider.search(q);
-    if (datasetResults.length > 0) {
-      return datasetResults;
-    }
+    // 1. MapTiler Geocoding API
+    if (this.isAvailable()) {
+      try {
+        const url = `https://api.maptiler.com/geocoding/${encodeURIComponent(q)}.json?key=${this.apiKey}&language=en&limit=6`;
+        const res = await fetch(url, { headers: { Accept: 'application/json' } });
+        if (res.ok) {
+          const data = await res.json();
+          const features = data.features || [];
+          if (features.length > 0) {
+            return features
+              .filter((f) => {
+                const types = f.place_type || [];
+                return !types.includes('address') || q.toLowerCase().includes('street') || q.toLowerCase().includes('road');
+              })
+              .map((f) => {
+                const coords = f.geometry?.coordinates || [0, 0];
+                const textName = f.text || f.place_name?.split(',')[0].trim() || q;
+                const types = f.place_type || [];
 
-    // Layer 2: Google Maps Provider (if API configured)
-    if (this.googleProvider.isAvailable()) {
-      const googleResults = await this.googleProvider.search(q);
-      if (googleResults.length > 0) {
-        return googleResults;
+                let country = 'Global';
+                let region = null;
+                for (const ctx of f.context || []) {
+                  if (ctx.id?.startsWith('country')) country = ctx.text;
+                  if (ctx.id?.startsWith('region')) region = ctx.text;
+                }
+
+                let itemType = 'city';
+                let camDist = 3.8;
+                if (types.includes('country')) {
+                  itemType = 'country';
+                  camDist = 5.5;
+                } else if (types.includes('poi') || types.includes('landmark')) {
+                  itemType = 'landmark';
+                  camDist = 3.25;
+                }
+
+                return {
+                  id: `maptiler-${f.id || textName}`.replace(/\./g, '-'),
+                  name: textName,
+                  country,
+                  region,
+                  latitude: coords[1],
+                  longitude: coords[0],
+                  lat: coords[1],
+                  lng: coords[0],
+                  type: itemType,
+                  source: 'maptiler',
+                  provider: 'dynamic',
+                  formattedName: f.place_name || textName,
+                  cameraDistance: camDist,
+                  curated: false,
+                };
+              });
+          }
+        }
+      } catch (err) {
+        console.warn('MapTiler client search warning:', err);
       }
     }
 
-    // Layer 3: Nominatim Worldwide Geocoder
-    const nominatimResults = await this.nominatimProvider.search(q);
-    return nominatimResults;
+    // 2. OpenStreetMap Nominatim Fallback
+    try {
+      const nomUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=5&accept-language=en`;
+      const nomRes = await fetch(nomUrl, {
+        headers: { 'User-Agent': 'AITrip-Agentic-App/2.0 (contact@aitrip.local)' },
+      });
+      if (nomRes.ok) {
+        const items = await nomRes.json();
+        return items.map((item) => ({
+          id: `osm-${item.place_id}`,
+          name: item.name || item.display_name?.split(',')[0].trim() || q,
+          country: item.display_name?.split(',').slice(-1)[0]?.trim() || 'Global',
+          latitude: parseFloat(item.lat),
+          longitude: parseFloat(item.lon),
+          lat: parseFloat(item.lat),
+          lng: parseFloat(item.lon),
+          type: item.class === 'natural' ? 'mountain' : item.type === 'monument' ? 'landmark' : 'city',
+          source: 'nominatim',
+          provider: 'dynamic',
+          formattedName: item.display_name,
+          cameraDistance: 3.8,
+          curated: false,
+        }));
+      }
+    } catch {
+      // Offline fallback
+    }
+
+    return [];
+  }
+
+  async resolve(query) {
+    const results = await this.search(query);
+    return results.length > 0 ? results[0] : null;
   }
 }
 
-export const unifiedLocationService = new UnifiedLocationService();
+export const locationProvider = new MapTilerLocationProvider();

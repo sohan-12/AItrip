@@ -7,34 +7,46 @@ from backend.models.location import (
 )
 
 class TripPlanningState(TypedDict, total=False):
-    # Input Configuration
+    # Core User Request & Context
+    user_request: Optional[str]
     origin: Dict[str, Any]
     destination: Dict[str, Any]
+    destinations: Optional[List[Dict[str, Any]]] # Multi-city support
+    travel_dates: Optional[Dict[str, str]]
     duration_days: int
     travelers: int
     budget: float
+    currency: str
     budget_tier: str
     travel_style: str
     pace: str
     preferences: List[str]
     user_prompt: Optional[str]
 
+    # Location & Provider Context
+    location_context: Dict[str, Any]
+    memory_context: Dict[str, Any]
+
     # Agent Deliverables
     research: Dict[str, Any]
-    weather: Dict[str, Any]
-    transport: Dict[str, Any]
-    hotel: Dict[str, Any]
-    experiences: List[Dict[str, Any]]
-    budget_breakdown: Dict[str, Any]
-    safety: Dict[str, Any]
-    packing_checklist: List[Dict[str, Any]]
+    weather_data: Dict[str, Any]
+    transport_options: Dict[str, Any]
+    hotel_options: Dict[str, Any]
+    attractions: List[Dict[str, Any]]
+    local_experiences: List[Dict[str, Any]]
+    safety_information: Dict[str, Any]
+    budget_analysis: Dict[str, Any]
+    packing_list: List[Dict[str, Any]]
+    warnings: List[str]
 
-    # Multi-Agent Coordination & Synthesis
+    # Multi-Agent Coordination, Conflict Resolution & Synthesis
     conflicts: List[Dict[str, Any]]
     optimizations: List[str]
     itinerary: List[Dict[str, Any]]
+    updated_itinerary: Optional[List[Dict[str, Any]]]
     agent_events: List[Dict[str, Any]]
     summary: str
+    final_response: Dict[str, Any]
 
     # Dynamic Replanning State
     condition_change: Optional[str]

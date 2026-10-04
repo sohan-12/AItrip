@@ -1,13 +1,13 @@
-from fastapi import APIRouter, Query, HTTPException
+import logging
+from fastapi import APIRouter, Query, HTTPException, Path
 from typing import List, Optional
 from backend.models.location import NormalizedLocation, LocationSearchResponse, LocationResolveRequest, NearbyPlace
 from backend.services.curated_service import CuratedLocationService
-from backend.services.google_places_service import (
-    search_places_google,
-    get_place_details_google,
-    search_nearby_google,
-)
-from backend.services.geocoding_service import GeocodingService
+from backend.providers.maptiler import MapTilerLocationProvider
+from backend.providers.wikimedia import WikimediaImageProvider
+from backend.providers.geoapify import GeoapifyPlacesProvider
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/locations", tags=["locations"])
 
@@ -20,7 +20,7 @@ async def search_locations(
     results: List[NormalizedLocation] = []
     seen = set()
 
-    # LAYER 1: Showcase Curated Destinations
+    # LAYER 1: Showcase Curated Destinations (Instant)
     curated = CuratedLocationService.search(query)
     for c in curated:
         key = f"{c.name.lower()}-{c.country.lower()}"
@@ -28,25 +28,16 @@ async def search_locations(
             seen.add(key)
             results.append(c)
 
-    # LAYER 2: Official Google Places API (New) Runtime Resolution
+    # LAYER 2: MapTiler Global Geocoding Runtime Resolution (with Nominatim Fallback)
     try:
-        google_results = await search_places_google(query, language_code=lang)
-        for g in google_results:
-            key = f"{g.name.lower()}-{g.country.lower()}"
+        maptiler_results = await MapTilerLocationProvider.search(query, limit=6)
+        for loc in maptiler_results:
+            key = f"{loc.name.lower()}-{loc.country.lower()}"
             if key not in seen:
                 seen.add(key)
-                results.append(g)
-    except Exception:
-        # Fallback to universal geocoding service
-        try:
-            fallback_results = await GeocodingService.search(query, limit=6)
-            for f in fallback_results:
-                key = f"{f.name.lower()}-{f.country.lower()}"
-                if key not in seen:
-                    seen.add(key)
-                    results.append(f)
-        except Exception:
-            pass
+                results.append(loc)
+    except Exception as e:
+        logger.warning(f"MapTiler search error: {e}")
 
     return LocationSearchResponse(
         query=query,
@@ -65,41 +56,49 @@ async def resolve_location(req: LocationResolveRequest):
     if curated_match:
         return curated_match
 
-    # 2. Check Google Places
+    # 2. Check MapTiler
     try:
-        google_matches = await search_places_google(query, language_code="en")
-        if google_matches:
-            return google_matches[0]
-    except Exception:
-        pass
-
-    # 3. Check universal resolver
-    resolved = await GeocodingService.resolve(query)
-    if resolved:
-        return resolved
+        resolved = await MapTilerLocationProvider.resolve(query)
+        if resolved:
+            # Resolve image concurrently with 3.0s timeout
+            if not resolved.image:
+                try:
+                    img = await WikimediaImageProvider.get_location_image(
+                        resolved.name, country=resolved.country, region=resolved.region
+                    )
+                    if img:
+                        resolved.image = img
+                        resolved.photoUrl = img
+                except Exception:
+                    pass
+            return resolved
+    except Exception as e:
+        logger.warning(f"Location resolution error: {e}")
 
     raise HTTPException(status_code=404, detail="Location not found. Try another spelling or place name.")
 
 @router.get("/details", response_model=Optional[NormalizedLocation])
 async def get_place_details(
-    placeId: str = Query(..., description="Google Place ID or internal place ID"),
-    lang: str = Query("en", description="Preferred language code"),
+    placeId: str = Query(..., description="Place ID or internal ID"),
+    name: Optional[str] = Query(None),
 ):
-    details = await get_place_details_google(placeId, language_code=lang)
-    if not details:
-        raise HTTPException(status_code=404, detail=f"Place details not found for ID '{placeId}'")
-    return details
+    if name:
+        resolved = await MapTilerLocationProvider.resolve(name)
+        if resolved:
+            return resolved
+    return None
 
 @router.get("/nearby", response_model=List[NearbyPlace])
 async def get_nearby(
     lat: float = Query(..., description="Latitude"),
     lng: float = Query(..., description="Longitude"),
     radius: float = Query(15000.0, description="Search radius in meters"),
-    lang: str = Query("en", description="Preferred language code"),
     limit: int = Query(6, ge=1, le=20),
 ):
     try:
-        places = await search_nearby_google(lat, lng, radius=radius, language_code=lang, limit=limit)
-        return places
+        return await GeoapifyPlacesProvider.get_nearby_places(
+            lat, lng, radius_meters=int(radius), limit=limit
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error retrieving nearby places: {str(e)}")
+        logger.warning(f"Error fetching nearby places: {e}")
+        return []

@@ -104,6 +104,10 @@ export function App() {
                 path="/trips/:id"
                 element={<TripDetailsPage onTriggerDelaySim={handleTriggerDelaySim} />}
               />
+              <Route
+                path="/trip/:id"
+                element={<TripDetailsPage onTriggerDelaySim={handleTriggerDelaySim} />}
+              />
               <Route path="/execution" element={<ExecutionCenterPage />} />
               <Route path="/memory" element={<MemoryPage />} />
               <Route path="/profile" element={<ProfilePage />} />

@@ -1,15 +1,31 @@
 import os
+import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-from backend.routers import locations, trips
 
 load_dotenv()
+logger = logging.getLogger(__name__)
+
+from backend.database import init_db
+from backend.routers import locations, places, trips, preferences, images
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Initialize database tables on startup
+    try:
+        init_db()
+        logger.info("Database initialized successfully on startup.")
+    except Exception as e:
+        logger.warning(f"Database initialization warning: {e}")
+    yield
 
 app = FastAPI(
     title="AITrip Agentic AI Travel Planner API",
-    description="Backend microservice for Location Resolution, LangGraph Agent Orchestration, and Dynamic Itinerary Synthesis.",
-    version="1.0.0",
+    description="Production-grade FastAPI backend for Location Resolution, LangGraph Multi-Agent Orchestration, and Dynamic Itinerary Synthesis.",
+    version="2.0.0",
+    lifespan=lifespan,
 )
 
 # CORS configuration for frontend
@@ -26,16 +42,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount API Routers
+# Mount Routers
 app.include_router(locations.router)
+app.include_router(places.router)
 app.include_router(trips.router)
+app.include_router(preferences.router)
+app.include_router(images.router)
 
 @app.get("/")
 async def root():
     return {
         "status": "online",
         "service": "AITrip Agentic AI Travel Planner API",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "docs": "/docs",
     }
 
@@ -43,9 +62,17 @@ async def root():
 async def health_check():
     return {
         "status": "healthy",
-        "database": "connected",
-        "geocoder": "active",
-        "agents": ["Supervisor", "Planner", "Transport", "Hotel", "Weather", "Budget", "Research", "Execution"],
+        "database": "active",
+        "geocoder": "maptiler",
+        "places": "geoapify",
+        "research": "tavily",
+        "weather": "open-meteo",
+        "llm": "groq",
+        "agents": [
+            "Supervisor", "Planner", "Research", "Weather",
+            "Transport", "Hotel", "Experiences", "Safety",
+            "Budget", "ConflictDetector", "Packing", "Optimizer", "Replanning"
+        ],
     }
 
 if __name__ == "__main__":
